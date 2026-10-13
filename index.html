@@ -86,6 +86,8 @@ function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';se
 function log(a){db.log.unshift({t:new Date().toLocaleString('id-ID'),u:me?me.nama:'-',a});db.log=db.log.slice(0,500)}
 async function hash(s){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('sipas:'+s));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
 const uid=()=>Math.random().toString(36).slice(2,9);
+const rid=r=>'n_'+String(r).replace(/[^A-Za-z0-9]/g,'_');
+var RACK=[];
 const today=()=>new Date().toISOString().slice(0,10);
 const fd=d=>d?new Date(d).toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'}):'-';
 const uname=id=>(db.users.find(u=>u.id===id)||{}).nama||'-';
@@ -203,12 +205,17 @@ function procInbox(){
   }else{
    let no=+o.no||nextNo(yrOf(o.tgl),true),nm=fmtNo(no,o.kode,o.tgl);
    if(bentrok(no,o.tgl,nm)){no=nextNo(yrOf(o.tgl),true);nm=fmtNo(no,o.kode,o.tgl)}
-   db.keluar.push({id:uid(),no,nomor:nm,tgl:o.tgl,tujuan:o.tujuan||'-',perihal:o.perihal,klasifikasi:o.kode,ttd:db.set.kepsek,jabatan:'Kepala Sekolah',status:'konsep',sifat:'Biasa',lamp:'',isi:o.isi||'',ref:o.ref,src:'Notula Digital'});n++}
+   db.keluar.push({id:rid(o.ref),no,nomor:nm,tgl:o.tgl,tujuan:o.tujuan||'-',perihal:o.perihal,klasifikasi:o.kode,ttd:db.set.kepsek,jabatan:'Kepala Sekolah',status:'konsep',sifat:'Biasa',lamp:'',isi:o.isi||'',ref:o.ref,src:'Notula Digital'});n++}
  });
  const done=new Set(ops.map(o=>o&&o.oid));
  if(n){db.log.unshift({t:new Date().toLocaleString('id-ID'),u:'Notula Digital',a:'Menerima '+n+' nomor surat dari Notula Digital'});db.log=db.log.slice(0,500);if(!save())return 0}
+ ops.forEach(o=>{if(o&&o.rm&&o.oid)RACK.push(o.oid)});
  try{localStorage.setItem(IBX,JSON.stringify(inboxOps().filter(o=>!done.has(o&&o.oid))))}catch(e){}
  return n}
+// Antrean dari Notula di perangkat lain (lewat Google Sheets)
+function takeRemote(l){if(!db||!Array.isArray(l)||!l.length)return 0;const rs=new Set(l.map(o=>o&&o.oid)),cur=inboxOps();cur.forEach(o=>{if(o&&rs.has(o.oid))o.rm=1});const have=new Set(cur.map(o=>o&&o.oid)),add=l.filter(o=>o&&o.oid&&!have.has(o.oid)).map(o=>({...o,rm:1}));
+ try{localStorage.setItem(IBX,JSON.stringify(cur.concat(add)))}catch(e){return 0}
+ const n=procInbox();if(n&&me&&['dash','keluar','arsip'].includes(page)&&$('#mod').style.display!=='flex')VIEW[page]();return n}
 function syncInbox(){if(!db)return;const n=procInbox();if(n&&me&&['dash','keluar','arsip'].includes(page)&&$('#mod').style.display!=='flex')VIEW[page]()}
 addEventListener('storage',e=>{if(e.key===IBX)syncInbox()});addEventListener('focus',syncInbox);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncInbox()});
 function fmtNo(n,kode,tgl){const d=new Date(tgl||today());return db.set.fmt.replace('{no}',String(n).padStart(3,'0')).replace('{kode}',kode||'000').replace('{kls}',kode||'000').replace('{unit}',db.set.unit||'-').replace('{bln}',d.getMonth()+1).replace('{thn}',d.getFullYear())}
@@ -394,24 +401,40 @@ const GS=`/**
  * Jangan bagikan URL aplikasi web dan TOKEN ini kepada pihak lain.
  */
 const TOKEN='GANTI_TOKEN';
+const TOKEN_NTL='GANTI_TOKEN_NOTULA';
 const CHUNK=40000;
 //MERGE
 function bacaMaster(ss){var b=ss.getSheetByName('_backup'),s='';if(b&&b.getLastRow()>0)s=b.getRange(1,1,b.getLastRow(),1).getValues().map(function(r){return r[0]}).join('');try{return s?JSON.parse(s):{}}catch(x){return {}}}
 function versi(){return PropertiesService.getScriptProperties().getProperty('ver')||''}
 const BIRU='#0f5c8c';
+function bump(){PropertiesService.getScriptProperties().setProperty('ver',String(Date.now()))}
+function inboxList(ss){var s=ss.getSheetByName('_inbox');if(!s||s.getLastRow()<1)return [];return s.getRange(1,1,s.getLastRow(),1).getValues().map(function(r){try{return JSON.parse(r[0])}catch(x){return null}}).filter(function(o){return o&&o.oid&&o.ref})}
+function inboxSave(ss,list){var s=ss.getSheetByName('_inbox');if(!s){s=ss.insertSheet('_inbox');s.hideSheet()}s.clear();if(list.length)s.getRange(1,1,list.length,1).setNumberFormat('@').setValues(list.map(function(o){return [JSON.stringify(o)]}))}
+function cleanOp(o){if(!o||!o.oid||!o.ref||!o.perihal||!o.kode||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(o.tgl)))return null;function t(v,n){return String(v==null?'':v).slice(0,n)}return {oid:t(o.oid,120),ref:t(o.ref,120),no:+o.no||0,tgl:t(o.tgl,10),kode:t(o.kode,40),tujuan:t(o.tujuan,300),perihal:t(o.perihal,300),isi:t(o.isi,1500),src:'Notula Digital'}}
+function tokenNtlOk(t){return TOKEN_NTL.indexOf('GANTI')!==0&&t===TOKEN_NTL}
 
 function doPost(e){
   var lock=LockService.getScriptLock();
   try{
     lock.waitLock(20000);
     var d=JSON.parse(e.postData.contents);
-    if(d.token!==TOKEN)return out({ok:false,error:'Token tidak cocok'});
+    var ntl=tokenNtlOk(d.token);
+    if(d.token!==TOKEN&&!(ntl&&d.action==='inbox'))return out({ok:false,error:'Token tidak cocok'});
     var ss=SpreadsheetApp.getActiveSpreadsheet();
+    if(d.action==='inbox'){
+      var add=(d.ops||[]).slice(0,20).map(cleanOp).filter(Boolean);
+      if(add.length){
+        var cur=inboxList(ss).filter(function(x){return !add.some(function(a){return a.ref===x.ref})});
+        inboxSave(ss,cur.concat(add));bump();
+      }
+      return out({ok:true,n:add.length});
+    }
     if(d.action==='sync'){
+      if(d.ack&&d.ack.length)inboxSave(ss,inboxList(ss).filter(function(x){return d.ack.indexOf(x.oid)<0}));
       var m=mergeAll(bacaMaster(ss),d.state);
       saveBackup(ss,JSON.stringify(m));
       var v=String(Date.now());PropertiesService.getScriptProperties().setProperty('ver',v);
-      return out({ok:true,state:m,ver:v});
+      return out({ok:true,state:m,ver:v,inbox:inboxList(ss)});
     }
     put(ss,'Surat Masuk',d.masuk);
     put(ss,'Surat Keluar',d.keluar);
@@ -431,14 +454,20 @@ function doGet(e){
   var cb=e&&e.parameter&&e.parameter.callback;
   if(cb&&!/^[A-Za-z0-9_]+$/.test(cb))cb='';
   try{
-    if(!e||!e.parameter||e.parameter.token!==TOKEN)return kirim({ok:false,error:'Token tidak cocok'},cb);
+    var tk=(e&&e.parameter)?e.parameter.token:'';
+    if(e&&e.parameter&&e.parameter.nomor&&(tk===TOKEN||tokenNtlOk(tk))){
+      var ss0=SpreadsheetApp.getActiveSpreadsheet(),ms=bacaMaster(ss0);
+      if(!ms.set)return kirim({ok:false,error:'SIPAS belum pernah sinkron ke Sheet. Buka SIPAS dulu.'},cb);
+      return kirim({ok:true,v:versi(),keluar:(ms.keluar||[]).map(function(k){return {no:k.no,tgl:k.tgl,nomor:k.nomor,ref:k.ref||'',src:k.src||''}}),set:{fmt:ms.set.fmt,unit:ms.set.unit},ops:inboxList(ss0)},cb);
+    }
+    if(!e||!e.parameter||tk!==TOKEN)return kirim({ok:false,error:'Token tidak cocok'},cb);
     if(e.parameter.cek)return kirim({ok:true,v:versi()},cb);
     var b=SpreadsheetApp.getActiveSpreadsheet().getSheetByName('_backup');
     var s='';
     if(b&&b.getLastRow()>0){
       s=b.getRange(1,1,b.getLastRow(),1).getValues().map(function(r){return r[0]}).join('');
     }
-    return kirim({ok:true,backup:s,v:versi()},cb);
+    return kirim({ok:true,backup:s,v:versi(),inbox:inboxList(SpreadsheetApp.getActiveSpreadsheet())},cb);
   }catch(err){
     return kirim({ok:false,error:String(err)},cb);
   }
@@ -601,18 +630,18 @@ function adopt(s){const b=JSON.stringify(pack()),n=Date.now(),m=mergeAll(s||{},p
 async function syncNow(manual){
  if(!db||!db.set.sheetUrl)return;if(SY.busy){SY.again=1;return}
  SY.busy=1;const rev=SY.rev;st('Menyinkronkan…');
- try{let r;const body=JSON.stringify({token:db.set.sheetToken,action:'sync',state:pack()});
+ try{let r;const sentAck=[...new Set(RACK)];const body=JSON.stringify({token:db.set.sheetToken,action:'sync',state:pack(),ack:sentAck});
   try{r=await(await fetch(db.set.sheetUrl,{method:'POST',body})).json()}
-  catch(e){await fetch(db.set.sheetUrl,{method:'POST',mode:'no-cors',body});const j=await gsGet();r={ok:j.ok,error:j.error,state:j.backup?JSON.parse(j.backup):{},ver:j.v}}
+  catch(e){await fetch(db.set.sheetUrl,{method:'POST',mode:'no-cors',body});const j=await gsGet();r={ok:j.ok,error:j.error,state:j.backup?JSON.parse(j.backup):{},ver:j.v,inbox:j.inbox}}
   if(!r||!r.ok)throw new Error((r&&r.error)||'Token tidak cocok / skrip belum versi terbaru');
-  adopt(r.state);SY.ver=r.ver||SY.ver;SY.ok=rev;
+  adopt(r.state);SY.ver=r.ver||SY.ver;SY.ok=rev;RACK=RACK.filter(x=>!sentAck.includes(x));if(r.inbox)takeRemote(r.inbox);
   db.set.lastSync=new Date().toLocaleString('id-ID');try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){}
   await kirimTabel();st();if(manual)toast('Sinkronisasi berhasil');
  }catch(e){st('Offline: perubahan menunggu dikirim',1);if(manual)toast('Gagal sinkron: '+(e.message||'periksa URL, token, dan koneksi'))}
  finally{SY.busy=0;if(SY.again){SY.again=0;setTimeout(()=>syncNow(),800)}}}
 function doSync(manual){return syncNow(manual)}
 async function poll(){if(!db||!db.set.sheetUrl||SY.busy)return;if(SY.rev>SY.ok)return syncNow();
- try{const j=await gsGet('&cek=1');if(j.v&&j.v!==SY.ver){const k=await gsGet();SY.ver=k.v||j.v;adopt(k.backup?JSON.parse(k.backup):{});if(SY.rev>SY.ok)syncNow()}st()}catch(e){st('Offline: menunggu koneksi',1)}}
+ try{const j=await gsGet('&cek=1');if(j.v&&j.v!==SY.ver){const k=await gsGet();SY.ver=k.v||j.v;adopt(k.backup?JSON.parse(k.backup):{});takeRemote(k.inbox);if(SY.rev>SY.ok)syncNow()}st()}catch(e){st('Offline: menunggu koneksi',1)}}
 setInterval(poll,30000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});addEventListener('online',()=>syncNow());
 // ---- impor/ekspor
 const CK={masuk:['nomor','tgl','tglTerima','asal','perihal','klasifikasi','sifat','status'],keluar:['nomor','tgl','tujuan','perihal','klasifikasi','ttd','jabatan','status','sifat','lamp','isi']};
